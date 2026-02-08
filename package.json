@@ -9,7 +9,6 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@squoosh/lib": "latest",
     "exifr": "latest",
     "jszip": "latest",
     "react": "latest",

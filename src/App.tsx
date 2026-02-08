@@ -214,11 +214,11 @@ export default function App() {
       formData.append("file", item.file);
 
       const keepMetadata = stripMetadata ? "0" : "1";
-      const url = `${apiBaseUrl.replace(/\/$/, "")}/convert?format=${item.format}&keepMetadata=${keepMetadata}`;
+      const url = `${apiBaseUrl.replace(/\/$/, "")}/convert/upload?format=${item.format}&keepMetadata=${keepMetadata}`;
 
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
-      xhr.responseType = "blob";
+      xhr.responseType = "json";
 
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
@@ -245,17 +245,23 @@ export default function App() {
 
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          const blob = xhr.response as Blob;
-          const objectUrl = URL.createObjectURL(blob);
+          const data = xhr.response || (xhr.responseText ? JSON.parse(xhr.responseText) : null);
+          const urlResult = data?.url as string | undefined;
+          const bytes = data?.bytes as number | undefined;
+          if (!urlResult) {
+            updateItem(item.id, { status: "error", message: "Upload succeeded but no URL returned." });
+            resolve();
+            return;
+          }
           const base = item.file.name.replace(/\.[^.]+$/, "") || "converted";
           const resultName = `${base}.${item.format}`;
           updateItem(item.id, {
             status: "done",
             message: "Conversion complete.",
-            resultUrl: objectUrl,
+            resultUrl: urlResult,
             resultName,
-            resultSize: blob.size,
-            resultBlob: blob,
+            resultSize: bytes,
+            resultBlob: undefined,
             downloadProgress: 100
           });
           setHistory((prev) =>
@@ -265,7 +271,7 @@ export default function App() {
                 name: resultName,
                 format: item.format,
                 inputSize: item.file.size,
-                outputSize: blob.size,
+                outputSize: bytes || 0,
                 savedAt: new Date().toISOString()
               },
               ...prev
@@ -328,12 +334,22 @@ export default function App() {
 
   const downloadZip = async () => {
     const zip = new JSZip();
-    const readyItems = items.filter((item) => item.status === "done" && item.resultBlob && item.resultName);
+    const readyItems = items.filter((item) => item.status === "done" && item.resultName);
     if (!readyItems.length) return;
 
-    readyItems.forEach((item) => {
-      zip.file(item.resultName as string, item.resultBlob as Blob);
-    });
+    for (const item of readyItems) {
+      if (item.resultBlob) {
+        zip.file(item.resultName as string, item.resultBlob as Blob);
+        continue;
+      }
+      if (item.resultUrl) {
+        const res = await fetch(item.resultUrl);
+        if (res.ok) {
+          const blob = await res.blob();
+          zip.file(item.resultName as string, blob);
+        }
+      }
+    }
 
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
@@ -347,8 +363,8 @@ export default function App() {
   const removeItem = (id: string) => {
     setItems((prev) => {
       const target = prev.find((item) => item.id === id);
-      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
-      if (target?.resultUrl) URL.revokeObjectURL(target.resultUrl);
+      if (target?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(target.previewUrl);
+      if (target?.resultUrl?.startsWith("blob:")) URL.revokeObjectURL(target.resultUrl);
       if (target?.comparisons) {
         target.comparisons.forEach((entry) => URL.revokeObjectURL(entry.url));
       }
@@ -445,10 +461,6 @@ export default function App() {
           <p className="stat-label">Completed</p>
           <p className="stat-value">{completed}</p>
         </div>
-        <div className="stat card">
-          <p className="stat-label">API</p>
-          <p className="stat-value small">{apiBaseUrl}</p>
-        </div>
       </section>
 
       <section className="card panel">
@@ -456,15 +468,6 @@ export default function App() {
           <div>
             <h2>Conversion queue</h2>
             <p className="hint">Track progress and download results as they finish.</p>
-          </div>
-          <div className="api-field">
-            <label htmlFor="api">API base URL</label>
-            <input
-              id="api"
-              type="text"
-              value={apiBaseUrl}
-              onChange={(event) => setApiBaseUrl(event.target.value)}
-            />
           </div>
         </div>
 
