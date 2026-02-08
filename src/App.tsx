@@ -325,34 +325,77 @@ export default function App() {
     updateItem(item.id, { compareStatus: "working", compareMessage: "Comparing sizes…" });
 
     const results: Comparison[] = [];
-    const keepMetadata = stripMetadata ? "0" : "1";
+    const baseUrl = apiBaseUrl.replace(/\/$/, "");
 
-    for (const fmt of compareFormats) {
-      const formData = new FormData();
-      formData.append("file", item.file);
+    if (item.format === "svg") {
+      const keepMetadata = stripMetadata ? "0" : "1";
+      for (const fmt of compareFormats) {
+        const formData = new FormData();
+        formData.append("file", item.file);
 
-      const url = `${apiBaseUrl.replace(/\/$/, "")}/convert?format=${fmt}&keepMetadata=${keepMetadata}`;
+        const url = `${baseUrl}/convert?format=${fmt}&keepMetadata=${keepMetadata}`;
 
-      try {
-        const res = await fetch(url, {
-          method: "POST",
-          body: formData
-        });
+        try {
+          const res = await fetch(url, {
+            method: "POST",
+            body: formData
+          });
 
-        if (!res.ok) {
-          throw new Error(`Status ${res.status}`);
+          if (!res.ok) {
+            throw new Error(`Status ${res.status}`);
+          }
+
+          const blob = await res.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          results.push({ format: fmt, size: blob.size, url: objectUrl });
+        } catch {
+          updateItem(item.id, { compareStatus: "error", compareMessage: "Comparison failed. Try again." });
+          return;
         }
-
-        const blob = await res.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        results.push({ format: fmt, size: blob.size, url: objectUrl });
-      } catch {
-        updateItem(item.id, { compareStatus: "error", compareMessage: "Comparison failed. Try again." });
-        return;
       }
+
+      updateItem(item.id, { comparisons: results, compareStatus: "done", compareMessage: "Comparison ready." });
+      return;
     }
 
-    updateItem(item.id, { comparisons: results, compareStatus: "done", compareMessage: "Comparison ready." });
+    try {
+      const formData = new FormData();
+      formData.append("file", item.file);
+      const uploadRes = await fetch(`${baseUrl}/upload`, { method: "POST", body: formData });
+      if (!uploadRes.ok) {
+        throw new Error(`Status ${uploadRes.status}`);
+      }
+      const data = (await uploadRes.json()) as { urls?: Record<string, string> };
+
+      for (const fmt of compareFormats) {
+        const url = data?.urls?.[fmt];
+        if (!url) continue;
+
+        let size = 0;
+        try {
+          const head = await fetch(url, { method: "HEAD" });
+          const len = head.headers.get("content-length");
+          if (len) size = Number(len);
+        } catch {
+          // fallback below
+        }
+
+        if (!size) {
+          const res = await fetch(url);
+          if (!res.ok) {
+            throw new Error(`Status ${res.status}`);
+          }
+          const blob = await res.blob();
+          size = blob.size;
+        }
+
+        results.push({ format: fmt, size, url });
+      }
+
+      updateItem(item.id, { comparisons: results, compareStatus: "done", compareMessage: "Comparison ready." });
+    } catch {
+      updateItem(item.id, { compareStatus: "error", compareMessage: "Comparison failed. Try again." });
+    }
   };
 
   const convertAll = async () => {
