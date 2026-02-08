@@ -214,11 +214,15 @@ export default function App() {
       formData.append("file", item.file);
 
       const keepMetadata = stripMetadata ? "0" : "1";
-      const url = `${apiBaseUrl.replace(/\/$/, "")}/convert/upload?format=${item.format}&keepMetadata=${keepMetadata}`;
+      const baseUrl = apiBaseUrl.replace(/\/$/, "");
+      const isSvg = item.format === "svg";
+      const url = isSvg
+        ? `${baseUrl}/convert?format=${item.format}&keepMetadata=${keepMetadata}`
+        : `${baseUrl}/upload`;
 
       const xhr = new XMLHttpRequest();
       xhr.open("POST", url);
-      xhr.responseType = "json";
+      xhr.responseType = isSvg ? "blob" : "json";
 
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
@@ -245,22 +249,52 @@ export default function App() {
 
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
+          const base = item.file.name.replace(/\.[^.]+$/, "") || "converted";
+          const resultName = `${base}.${item.format}`;
+
+          if (isSvg) {
+            const blob = xhr.response as Blob;
+            const objectUrl = URL.createObjectURL(blob);
+            updateItem(item.id, {
+              status: "done",
+              message: "Conversion complete.",
+              resultUrl: objectUrl,
+              resultName,
+              resultSize: blob.size,
+              resultBlob: blob,
+              downloadProgress: 100
+            });
+            setHistory((prev) =>
+              [
+                {
+                  id: item.id,
+                  name: resultName,
+                  format: item.format,
+                  inputSize: item.file.size,
+                  outputSize: blob.size,
+                  savedAt: new Date().toISOString()
+                },
+                ...prev
+              ].slice(0, 10)
+            );
+            resolve();
+            return;
+          }
+
           const data = xhr.response || (xhr.responseText ? JSON.parse(xhr.responseText) : null);
-          const urlResult = data?.url as string | undefined;
-          const bytes = data?.bytes as number | undefined;
+          const urlResult = data?.urls?.[item.format] as string | undefined;
           if (!urlResult) {
             updateItem(item.id, { status: "error", message: "Upload succeeded but no URL returned." });
             resolve();
             return;
           }
-          const base = item.file.name.replace(/\.[^.]+$/, "") || "converted";
-          const resultName = `${base}.${item.format}`;
+
           updateItem(item.id, {
             status: "done",
             message: "Conversion complete.",
             resultUrl: urlResult,
             resultName,
-            resultSize: bytes,
+            resultSize: undefined,
             resultBlob: undefined,
             downloadProgress: 100
           });
@@ -271,7 +305,7 @@ export default function App() {
                 name: resultName,
                 format: item.format,
                 inputSize: item.file.size,
-                outputSize: bytes || 0,
+                outputSize: 0,
                 savedAt: new Date().toISOString()
               },
               ...prev
